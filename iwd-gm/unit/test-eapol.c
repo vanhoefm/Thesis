@@ -73,10 +73,10 @@ static const uint8_t *spa;
 char * __afl_input_filename = NULL;
 uint8_t * __afl_key;
 uint8_t  * __afl_key1;
-//uint8_t  * __afl_key2;
+uint8_t  * __afl_key2;
 size_t len_frame1;
 size_t len_frame2;
-//size_t len_frame3;
+size_t len_frame3;
 #define BUF_LEN 2048
 
 
@@ -261,6 +261,9 @@ void * __afl_get_key_data_ptk( ){
         __afl_key = eapol_key_data_4;
         // __afl_key = eap1;
         __afl_key1= eapol_key_data_6;
+
+        __afl_key2= eapol_key_data_6;
+
        // __afl_key1=eap2;
         //printf("%d %d", sizeof(eap1), sizeof(eapol_key_data_4));
         len_frame1= sizeof(eapol_key_data_4);
@@ -315,6 +318,27 @@ void * __afl_get_key_data_ptk( ){
         __afl_key1[i] = data;
         printf("%d ", __afl_key1[i]);
     }
+
+
+
+    //  printf("\nReading Frame 3\n");
+    fread(&len_frame3, sizeof(size_t), 1, fp);
+    if(len_frame3 <= 0 || len_frame3 > 1024){
+        printf("\nLen frame2 is either < 0 or > of file size! %ld\n",len_frame3);
+        exit(EXIT_FAILURE);
+        //return -1;
+    }
+    printf("\n------------------------------------------------------\n");
+    printf("\n");
+    printf("Frame 2 len: %ld\n\n",len_frame3);
+    __afl_key2 = (char *)malloc(sizeof(char)* len_frame3);
+    for (i=0 ; i <= len_frame3; i++){
+        fread(&data, sizeof(uint8_t), 1, fp);
+        __afl_key2[i] = data;
+        printf("%d ", __afl_key2[i]);
+    }
+
+
 
 
     printf("\n");
@@ -664,7 +688,9 @@ static int verify_step4(uint32_t ifindex,
     size_t ek_len = sizeof(struct eapol_key) +
                     L_BE16_TO_CPU(ek->key_data_len);
 
-
+    // Mathy: the exact reply should be ignored. As long as there
+    // is a reply, we are good.
+#if 0
     assert(ifindex == 1);
     assert(!memcmp(aa_addr, aa, 6));
     assert(proto == ETH_P_PAE);
@@ -679,6 +705,7 @@ static int verify_step4(uint32_t ifindex,
         //assert(false);
         exit(1);
     }
+#endif
 
 //       assert(ek_len == expected_step4_frame_size);
   //  assert(!memcmp(ek, expected_step4_frame, expected_step4_frame_size));
@@ -693,6 +720,19 @@ static bool test_nonce(uint8_t nonce[])
     memcpy(nonce, snonce, 32);
 
     return true;
+}
+
+static void detect_key_reinstallation(struct handshake_state *hs,
+                              const uint8_t *tk, uint32_t cipher)
+{
+    static uint8_t prev_key[16] = {0};
+
+    if (memcmp(tk, prev_key, 16) == 0) {
+        printf("===> Key reinstallation detected!\n");
+        assert(0);
+    }
+
+    memcpy(prev_key, tk, 16);
 }
 
 
@@ -724,7 +764,6 @@ static void eapol_sm_test_ptk(const void *data)
     snonce = eapol_key_test_4.key_nonce ;
     __handshake_set_get_nonce_func(test_nonce);
 
-
     aa = ap_address;
     spa = sta_address;
     verify_step2_called = false;
@@ -748,6 +787,8 @@ static void eapol_sm_test_ptk(const void *data)
 
 
     r =  handshake_state_set_supplicant_rsn(hs,eapol_key_data_4 + sizeof(struct eapol_key));
+
+    __handshake_set_install_tk_func(detect_key_reinstallation);
 
     assert(r);
 /*
@@ -783,10 +824,15 @@ static void eapol_sm_test_ptk(const void *data)
         printf("step 4 true\n");
     }
 
-    eapol_sm_free(sm);
-    handshake_state_free(hs);
-    printf("Exit from test\n");
-    eapol_exit();
+    // Mathy: inject the second packet a second time. This is to quickly simulate
+    // a key reinstallation. This is not ideal.
+    __eapol_set_tx_packet_func(verify_step4);
+    __eapol_rx_packet(1, aa, ETH_P_PAE, __afl_key2, len_frame3, false);
+
+    //eapol_sm_free(sm);
+    //handshake_state_free(hs);
+    //printf("Exit from test\n");
+    //eapol_exit();
 }
 
 
@@ -862,10 +908,10 @@ static void eapol_sm_test_igtk(const void *data)
         printf("step 4 true\n");
     }
  
-    eapol_sm_free(sm);
-    handshake_state_free(hs);
+    //eapol_sm_free(sm);
+    //handshake_state_free(hs);
 
-    eapol_exit();
+    //eapol_exit();
 }
 
 
@@ -888,7 +934,7 @@ int main(int argc, char *argv[])
 
 
     l_test_add("EAPoL/WPA2 PTK State Machine", &eapol_sm_test_ptk, NULL);
-    l_test_add("EAPoL IGTK & 4-Way Handshake",&eapol_sm_test_igtk, NULL);
+    //l_test_add("EAPoL IGTK & 4-Way Handshake",&eapol_sm_test_igtk, NULL);
 
     done:
     return l_test_run();
